@@ -6,6 +6,8 @@ import {
   TrendingUp, TrendingDown, DollarSign, AlertCircle, 
   ArrowUpRight, ArrowDownRight, Activity, Calendar, Trash2
 } from 'lucide-react';
+import { collection, addDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
+import { db } from './firebase';
 
 // Mock data for the next 12 weeks
 const liquidityData = [
@@ -116,23 +118,12 @@ const upcomingPayments = [
   { id: 5, type: 'Ut', description: 'Husleie Q4', amount: 150000, date: '01.des', status: 'pending' },
 ];
 
-const PAYMENTS_KEY = 'likvid_payments_v1';
-const TIMEFRAME_KEY = 'likvid_timeframe_v1';
-
 const App = () => {
-  const [timeframe, setTimeframe] = useState(() => {
-    try { return localStorage.getItem(TIMEFRAME_KEY) || '12weeks'; } catch { return '12weeks'; }
-  });
-  const [payments, setPayments] = useState(() => {
-    try {
-      const raw = localStorage.getItem(PAYMENTS_KEY);
-      return raw ? JSON.parse(raw) : upcomingPayments;
-    } catch (e) {
-      return upcomingPayments;
-    }
-  });
-  // chartData is mutable when adding/removing payments
+  const [timeframe, setTimeframe] = useState('12weeks');
+  const [payments, setPayments] = useState<any[]>([]);
   const [chartData, setChartData] = useState(() => liquidityData.map(d => ({ ...d })));
+  const [loadingPayments, setLoadingPayments] = useState(true);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
   const [showAddPaymentModal, setShowAddPaymentModal] = useState(false);
   const [paymentType, setPaymentType] = useState<'Inn' | 'Ut'>('Inn');
   const [formData, setFormData] = useState({
@@ -153,25 +144,28 @@ const App = () => {
   const lowestWeekLabel = lowestWeekData?.week || null;
   const hasWarning = lowestWeekData !== undefined;
 
-  // Add payment handler: compute weekIndex from date and add to payments
-  const handleAddPayment = () => {
+  // Add payment handler: compute weekIndex from date and save to Firestore
+  const handleAddPayment = async () => {
     if (formData.description && formData.amount && formData.date) {
       const normalizedDate = normalizeDateInput(formData.date);
       const parsedDate = parseShortDate(normalizedDate);
       if (!parsedDate) return;
-      const newPayment = {
-        id: Math.max(...payments.map(p => p.id), 0) + 1,
+      const payload = {
         type: paymentType,
         description: formData.description,
-        amount: parseInt(formData.amount),
+        amount: parseInt(formData.amount, 10),
         date: normalizedDate,
-        status: 'pending' as const,
-      } as any;
-      const idx = Math.min(weekIndexForDate(parsedDate), liquidityData.length - 1);
-      newPayment.weekIndex = idx;
-      setPayments(prev => [...prev, newPayment]);
-      setFormData({ description: '', amount: '', date: '' });
-      setShowAddPaymentModal(false);
+        status: 'pending',
+        createdAt: Date.now(),
+      };
+      try {
+        await addDoc(collection(db, 'payments'), payload);
+        setFormData({ description: '', amount: '', date: '' });
+        setShowAddPaymentModal(false);
+      } catch (error) {
+        console.error(error);
+        setPaymentError('Feil ved lagring av betalingen');
+      }
     }
   };
 
@@ -188,19 +182,32 @@ const App = () => {
     a.click();
   };
 
-  const handleDeletePayment = (id: number) => {
-    setPayments(prev => prev.filter(p => p.id !== id));
+  const handleDeletePayment = async (id: string | number) => {
+    try {
+      await deleteDoc(doc(db, 'payments', String(id)));
+      setPayments(prev => prev.filter(p => p.id !== id));
+    } catch (error) {
+      console.error(error);
+      setPaymentError('Feil ved sletting av betalingen');
+    }
   };
 
-  // Persist payments to localStorage on every change
   useEffect(() => {
-    try { localStorage.setItem(PAYMENTS_KEY, JSON.stringify(payments)); } catch (e) {}
-  }, [payments]);
-
-  // Persist timeframe selection
-  useEffect(() => {
-    try { localStorage.setItem(TIMEFRAME_KEY, timeframe); } catch (e) {}
-  }, [timeframe]);
+    const paymentsCollection = collection(db, 'payments');
+    const unsubscribe = onSnapshot(paymentsCollection, (snapshot) => {
+      const data = snapshot.docs
+        .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+        .sort((a: any, b: any) => (a.createdAt || 0) - (b.createdAt || 0));
+      setPayments(data as any[]);
+      setLoadingPayments(false);
+    }, (error) => {
+      console.error(error);
+      setPaymentError('Kunne ikke laste betalinger, viser standardverdier');
+      setPayments(upcomingPayments);
+      setLoadingPayments(false);
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Rebuild chartData whenever payments change by applying all payments to a fresh base
   useEffect(() => {
