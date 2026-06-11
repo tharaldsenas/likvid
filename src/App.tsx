@@ -6,7 +6,7 @@ import {
   TrendingUp, TrendingDown, DollarSign, AlertCircle, 
   ArrowUpRight, ArrowDownRight, Activity, Calendar, Trash2
 } from 'lucide-react';
-import { collection, addDoc, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { collection, addDoc, deleteDoc, doc, getDocs, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { db } from './firebase';
 
 // Mock data for the next 12 weeks
@@ -230,24 +230,42 @@ const App = () => {
   };
 
   useEffect(() => {
-    const paymentsQuery = query(collection(db, 'payments'), orderBy('createdAt', 'asc'));
-    const unsubscribe = onSnapshot(paymentsQuery, async (snapshot) => {
-      if (snapshot.empty && !hasSeededDefaults) {
-        await seedDefaultPayments();
-        return;
+    const paymentsCollection = collection(db, 'payments');
+    const paymentsQuery = query(paymentsCollection, orderBy('createdAt', 'asc'));
+    let isMounted = true;
+
+    const initializePayments = async () => {
+      try {
+        const initialSnapshot = await getDocs(paymentsQuery);
+        if (initialSnapshot.empty && !hasSeededDefaults) {
+          await seedDefaultPayments();
+        }
+      } catch (error) {
+        console.error('Initial Firestore fetch failed:', error);
+        setPaymentError('Kunne ikke hente betalinger fra Firestore ved oppstart.');
+        setLoadingPayments(false);
       }
+    };
+
+    initializePayments();
+
+    const unsubscribe = onSnapshot(paymentsQuery, (snapshot) => {
       const data = snapshot.docs
         .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
         .sort((a: any, b: any) => getTimestampValue(a) - getTimestampValue(b));
+      if (!isMounted) return;
       setPayments(data as any[]);
       setLoadingPayments(false);
     }, (error) => {
       console.error(error);
       setPaymentError('Kunne ikke laste betalinger fra Firestore. Vennligst sjekk tilkobling eller regler.');
-      setPayments(upcomingPayments);
       setLoadingPayments(false);
     });
-    return () => unsubscribe();
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, [hasSeededDefaults]);
 
   // Rebuild chartData whenever payments change by applying all payments to a fresh base
