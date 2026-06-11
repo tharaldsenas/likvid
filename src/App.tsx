@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
 } from 'recharts';
@@ -23,6 +23,91 @@ const liquidityData = [
   { week: 'Uke 12', date: '17.des', ingoing: 850000, outgoing: 620000, balance: 1390000, target: 1000000 },
 ];
 
+// Keep a stable starting balance for recalculation when payments are added
+const initialStartingBalance = liquidityData[0].balance;
+
+// Start of chart weeks: use start of current week (Monday)
+const getStartOfWeek = (d = new Date()) => {
+  const date = new Date(d);
+  const day = date.getDay();
+  const diff = (day + 6) % 7; // days since Monday
+  date.setDate(date.getDate() - diff);
+  date.setHours(0,0,0,0);
+  return date;
+};
+const chartStartDate = getStartOfWeek();
+
+const monthMap: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, mai: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, okt: 9, oct: 9, nov: 10, des: 11, dec: 11
+};
+
+const normalizeDateInput = (value: string) => {
+  const raw = value.trim();
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+
+  const buildDate = (day: string, month: string, year: string) => {
+    const d = parseInt(day, 10);
+    const m = parseInt(month, 10);
+    let y = parseInt(year, 10);
+    if (year.length === 2) y += 2000;
+    if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${y}`;
+  };
+
+  if (digits.length === 6) {
+    return buildDate(digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 6)) || raw;
+  }
+
+  if (digits.length === 8) {
+    return buildDate(digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)) || raw;
+  }
+
+  const slashMatch = raw.match(/^(\d{1,2})[\/](\d{1,2})[\/](\d{2}|\d{4})$/);
+  if (slashMatch) {
+    return buildDate(slashMatch[1], slashMatch[2], slashMatch[3]) || raw;
+  }
+
+  return raw;
+};
+
+const parseShortDate = (s: string) => {
+  // Accepts 'dd.mmm', 'dd/mm/yy', 'dd/mm/yyyy', or ISO 'yyyy-mm-dd'
+  if (!s) return null;
+  const normalized = normalizeDateInput(s);
+  const slashMatch = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (slashMatch) {
+    const day = parseInt(slashMatch[1], 10);
+    const month = parseInt(slashMatch[2], 10) - 1;
+    const year = parseInt(slashMatch[3], 10);
+    return new Date(year, month, day);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T00:00:00');
+  const m = s.toLowerCase().match(/^(\d{1,2})\.(\w{3})$/);
+  if (!m) return null;
+  const day = parseInt(m[1], 10);
+  const mon = monthMap[m[2]];
+  if (mon === undefined) return null;
+  const year = new Date().getFullYear();
+  return new Date(year, mon, day);
+};
+
+const formatDisplayDate = (s: string) => {
+  const d = parseShortDate(s) || (s && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(s + 'T00:00:00'));
+  if (!d) return s;
+  const day = d.getDate().toString().padStart(2, '0');
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  const year = d.getFullYear().toString().slice(-2);
+  return `${day}/${month}/${year}`;
+};
+
+const weekIndexForDate = (d: Date) => {
+  const diff = d.getTime() - chartStartDate.getTime();
+  const idx = Math.floor(diff / (7 * 24 * 60 * 60 * 1000));
+  return Math.max(0, idx);
+};
+
 const upcomingPayments = [
   { id: 1, type: 'Ut', description: 'MVA Termin 4', amount: 345000, date: '10.nov', status: 'pending' },
   { id: 2, type: 'Ut', description: 'Arbeidsgiveravgift', amount: 185000, date: '15.nov', status: 'pending' },
@@ -31,9 +116,23 @@ const upcomingPayments = [
   { id: 5, type: 'Ut', description: 'Husleie Q4', amount: 150000, date: '01.des', status: 'pending' },
 ];
 
+const PAYMENTS_KEY = 'likvid_payments_v1';
+const TIMEFRAME_KEY = 'likvid_timeframe_v1';
+
 const App = () => {
-  const [timeframe, setTimeframe] = useState('12weeks');
-  const [payments, setPayments] = useState(upcomingPayments);
+  const [timeframe, setTimeframe] = useState(() => {
+    try { return localStorage.getItem(TIMEFRAME_KEY) || '12weeks'; } catch { return '12weeks'; }
+  });
+  const [payments, setPayments] = useState(() => {
+    try {
+      const raw = localStorage.getItem(PAYMENTS_KEY);
+      return raw ? JSON.parse(raw) : upcomingPayments;
+    } catch (e) {
+      return upcomingPayments;
+    }
+  });
+  // chartData is mutable when adding/removing payments
+  const [chartData, setChartData] = useState(() => liquidityData.map(d => ({ ...d })));
   const [showAddPaymentModal, setShowAddPaymentModal] = useState(false);
   const [paymentType, setPaymentType] = useState<'Inn' | 'Ut'>('Inn');
   const [formData, setFormData] = useState({
@@ -43,25 +142,34 @@ const App = () => {
   });
   const [showAllModal, setShowAllModal] = useState(false);
 
-  // Calculate key metrics
-  const currentBalance = liquidityData[0].balance;
-  const lowestForecast = Math.min(...liquidityData.map(d => d.balance));
-  const averageIngoing = liquidityData.reduce((acc, curr) => acc + curr.ingoing, 0) / liquidityData.length;
-  const averageOutgoing = liquidityData.reduce((acc, curr) => acc + curr.outgoing, 0) / liquidityData.length;
+  // Calculate key metrics from mutable chart data
+  const currentBalance = chartData[0].balance;
+  const lowestForecast = Math.min(...chartData.map(d => d.balance));
+  const averageIngoing = chartData.reduce((acc, curr) => acc + curr.ingoing, 0) / chartData.length;
+  const averageOutgoing = chartData.reduce((acc, curr) => acc + curr.outgoing, 0) / chartData.length;
   const netCashflow = averageIngoing - averageOutgoing;
+  const bufferThreshold = 1000000;
+  const lowestWeekData = chartData.find(d => d.balance < bufferThreshold);
+  const lowestWeekLabel = lowestWeekData?.week || null;
+  const hasWarning = lowestWeekData !== undefined;
 
-  // Add payment handler
+  // Add payment handler: compute weekIndex from date and add to payments
   const handleAddPayment = () => {
     if (formData.description && formData.amount && formData.date) {
+      const normalizedDate = normalizeDateInput(formData.date);
+      const parsedDate = parseShortDate(normalizedDate);
+      if (!parsedDate) return;
       const newPayment = {
         id: Math.max(...payments.map(p => p.id), 0) + 1,
         type: paymentType,
         description: formData.description,
         amount: parseInt(formData.amount),
-        date: formData.date,
+        date: normalizedDate,
         status: 'pending' as const,
-      };
-      setPayments([...payments, newPayment]);
+      } as any;
+      const idx = Math.min(weekIndexForDate(parsedDate), liquidityData.length - 1);
+      newPayment.weekIndex = idx;
+      setPayments(prev => [...prev, newPayment]);
       setFormData({ description: '', amount: '', date: '' });
       setShowAddPaymentModal(false);
     }
@@ -81,12 +189,44 @@ const App = () => {
   };
 
   const handleDeletePayment = (id: number) => {
-    setPayments(payments.filter(p => p.id !== id));
+    setPayments(prev => prev.filter(p => p.id !== id));
   };
+
+  // Persist payments to localStorage on every change
+  useEffect(() => {
+    try { localStorage.setItem(PAYMENTS_KEY, JSON.stringify(payments)); } catch (e) {}
+  }, [payments]);
+
+  // Persist timeframe selection
+  useEffect(() => {
+    try { localStorage.setItem(TIMEFRAME_KEY, timeframe); } catch (e) {}
+  }, [timeframe]);
+
+  // Rebuild chartData whenever payments change by applying all payments to a fresh base
+  useEffect(() => {
+    const base = liquidityData.map(d => ({ ...d }));
+    payments.forEach((p: any) => {
+      let parsed: Date | null = null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(p.date)) parsed = new Date(p.date + 'T00:00:00');
+      else parsed = parseShortDate(p.date);
+      const idx = parsed ? Math.min(weekIndexForDate(parsed), base.length - 1) : (p.weekIndex ?? 0);
+      if (idx < 0 || idx >= base.length) return;
+      if (p.type === 'Inn') base[idx].ingoing += p.amount;
+      else base[idx].outgoing += p.amount;
+    });
+    // recalc balances from initialStartingBalance
+    let prevBal = initialStartingBalance;
+    const updated = base.map((wk, i) => {
+      const bal = i === 0 ? initialStartingBalance + wk.ingoing - wk.outgoing : prevBal + wk.ingoing - wk.outgoing;
+      prevBal = bal;
+      return { ...wk, balance: bal };
+    });
+    setChartData(updated);
+  }, [payments]);
 
   // derive filtered data for charts based on timeframe
   const weeksCount = timeframe === '4weeks' ? 4 : timeframe === '12weeks' ? 12 : 24;
-  const filteredData = liquidityData.slice(0, Math.min(weeksCount, liquidityData.length));
+  const filteredData = chartData.slice(0, Math.min(weeksCount, chartData.length));
 
   // Formatting helpers
   const formatCurrency = (value: any) => {
@@ -166,8 +306,8 @@ const App = () => {
             <div>
               <div className="text-2xl font-bold text-slate-900">{formatCurrency(lowestForecast)}</div>
               <div className="text-sm text-slate-500 mt-1 flex items-center gap-1">
-                {lowestForecast < 1000000 ? (
-                  <span className="text-amber-600 font-medium text-xs">Under buffermål i Uke 6</span>
+                {hasWarning ? (
+                  <span className="text-amber-600 font-medium text-xs">Under buffermål i {lowestWeekLabel}</span>
                 ) : (
                   <span className="text-emerald-600 font-medium text-xs">Over buffermål hele perioden</span>
                 )}
@@ -281,17 +421,29 @@ const App = () => {
           <div className="space-y-6">
             
             {/* Critical Events/Warnings */}
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 shadow-sm">
+            <div className={`${hasWarning ? 'bg-amber-50 border border-amber-200 text-amber-900' : 'bg-emerald-50 border border-emerald-200 text-emerald-900'} rounded-xl p-5 shadow-sm`}>
               <div className="flex items-start gap-3">
-                <AlertCircle className="text-amber-600 mt-0.5 flex-shrink-0" size={20} />
+                <AlertCircle className={`${hasWarning ? 'text-amber-600' : 'text-emerald-600'} mt-0.5 flex-shrink-0`} size={20} />
                 <div>
-                  <h3 className="font-semibold text-amber-900">Varsler</h3>
-                  <p className="text-sm text-amber-800 mt-1">
-                    Prognosen viser at saldo kan falle under strategisk buffermål (1M NOK) i <strong>Uke 6</strong> på grunn av store forventede utbetalinger (MVA).
+                  <h3 className={`font-semibold ${hasWarning ? 'text-amber-900' : 'text-emerald-900'}`}>{hasWarning ? 'Varsler' : 'Ingen varsler'}</h3>
+                  <p className="text-sm mt-1">
+                    {hasWarning ? (
+                      <>Prognosen viser at saldo kan falle under strategisk buffermål ({formatCurrency(bufferThreshold)}) i <strong>{lowestWeekLabel}</strong> på grunn av store forventede utbetalinger (MVA).</>
+                    ) : (
+                      <>Prognosen viser ikke noen varsler. Saldo holder over strategisk buffermål ({formatCurrency(bufferThreshold)}) i perioden.</>
+                    )}
                   </p>
-                  <button className="mt-3 text-sm font-medium text-amber-700 hover:text-amber-900 bg-amber-100 px-3 py-1.5 rounded-md transition-colors">
-                    Se detaljer for Uke 6
-                  </button>
+                  {hasWarning && (
+                    <button
+                      onClick={() => {
+                        setTimeframe('12weeks');
+                        setShowAllModal(true);
+                      }}
+                      className="mt-3 text-sm font-medium text-amber-700 hover:text-amber-900 bg-amber-100 px-3 py-1.5 rounded-md transition-colors"
+                    >
+                      Se detaljer for {lowestWeekLabel}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -313,7 +465,7 @@ const App = () => {
                     </div>
                     <div className="flex justify-between items-center text-sm">
                       <span className="text-slate-500 flex items-center gap-1">
-                        <Calendar size={14} /> Forfall: {payment.date}
+                        <Calendar size={14} /> Forfall: {formatDisplayDate(payment.date)}
                       </span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                         payment.type === 'Inn' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'
@@ -342,7 +494,7 @@ const App = () => {
                         <div key={p.id} className="flex items-center justify-between p-3 border rounded-md">
                           <div>
                             <div className="font-medium text-slate-800">{p.description}</div>
-                            <div className="text-sm text-slate-500">Forfall: {p.date}</div>
+                            <div className="text-sm text-slate-500">Forfall: {formatDisplayDate(p.date)}</div>
                           </div>
                           <div className="flex items-center gap-3">
                             <div className={`font-semibold ${p.type === 'Inn' ? 'text-emerald-600' : 'text-rose-600'}`}>
@@ -429,11 +581,12 @@ const App = () => {
                   <label className="block text-sm font-medium text-slate-700 mb-1">Forfallsdato</label>
                   <input
                     type="text"
-                    placeholder="dd.mmm"
+                    placeholder="dd/mm/yyyy"
                     value={formData.date}
-                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                    onChange={(e) => setFormData({ ...formData, date: normalizeDateInput(e.target.value) })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                  <p className="text-xs text-slate-500 mt-1">Én gyldig datoformat: dd/mm/yyyy (eller 6/8 sifre som auto-konverteres)</p>
                 </div>
               </div>
               <div className="flex gap-3 mt-6">
