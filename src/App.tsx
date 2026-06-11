@@ -6,7 +6,7 @@ import {
   TrendingUp, TrendingDown, DollarSign, AlertCircle, 
   ArrowUpRight, ArrowDownRight, Activity, Calendar, Trash2
 } from 'lucide-react';
-import { collection, addDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { db } from './firebase';
 
 // Mock data for the next 12 weeks
@@ -124,6 +124,7 @@ const App = () => {
   const [chartData, setChartData] = useState(() => liquidityData.map(d => ({ ...d })));
   const [loadingPayments, setLoadingPayments] = useState(true);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [hasSeededDefaults, setHasSeededDefaults] = useState(false);
   const [showAddPaymentModal, setShowAddPaymentModal] = useState(false);
   const [paymentType, setPaymentType] = useState<'Inn' | 'Ut'>('Inn');
   const [formData, setFormData] = useState({
@@ -158,13 +159,15 @@ const App = () => {
         status: 'pending',
         createdAt: Date.now(),
       };
+      setShowAddPaymentModal(false);
       try {
-        await addDoc(collection(db, 'payments'), payload);
+        const docRef = await addDoc(collection(db, 'payments'), payload);
+        setPayments(prev => [...prev, { id: docRef.id, ...payload }]);
         setFormData({ description: '', amount: '', date: '' });
-        setShowAddPaymentModal(false);
       } catch (error) {
         console.error(error);
         setPaymentError('Feil ved lagring av betalingen');
+        setShowAddPaymentModal(true);
       }
     }
   };
@@ -192,26 +195,64 @@ const App = () => {
     }
   };
 
-  useEffect(() => {
+  const seedDefaultPayments = async () => {
     const paymentsCollection = collection(db, 'payments');
-    const unsubscribe = onSnapshot(paymentsCollection, (snapshot) => {
+    const timestamp = Date.now();
+    const entries = liquidityData.flatMap((week, index) => [
+      {
+        type: 'Inn',
+        description: `Basis innbetaling ${week.week}`,
+        amount: week.ingoing,
+        date: week.date,
+        status: 'forecast',
+        createdAt: timestamp + index * 2,
+      },
+      {
+        type: 'Ut',
+        description: `Basis utbetaling ${week.week}`,
+        amount: week.outgoing,
+        date: week.date,
+        status: 'forecast',
+        createdAt: timestamp + index * 2 + 1,
+      },
+    ]);
+    for (const entry of entries) {
+      await addDoc(paymentsCollection, entry);
+    }
+    setHasSeededDefaults(true);
+  };
+
+  const getTimestampValue = (item: any) => {
+    if (!item.createdAt) return 0;
+    if (typeof item.createdAt === 'number') return item.createdAt;
+    if (item.createdAt.seconds) return item.createdAt.seconds * 1000;
+    return 0;
+  };
+
+  useEffect(() => {
+    const paymentsQuery = query(collection(db, 'payments'), orderBy('createdAt', 'asc'));
+    const unsubscribe = onSnapshot(paymentsQuery, async (snapshot) => {
+      if (snapshot.empty && !hasSeededDefaults) {
+        await seedDefaultPayments();
+        return;
+      }
       const data = snapshot.docs
         .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
-        .sort((a: any, b: any) => (a.createdAt || 0) - (b.createdAt || 0));
+        .sort((a: any, b: any) => getTimestampValue(a) - getTimestampValue(b));
       setPayments(data as any[]);
       setLoadingPayments(false);
     }, (error) => {
       console.error(error);
-      setPaymentError('Kunne ikke laste betalinger, viser standardverdier');
+      setPaymentError('Kunne ikke laste betalinger fra Firestore. Vennligst sjekk tilkobling eller regler.');
       setPayments(upcomingPayments);
       setLoadingPayments(false);
     });
     return () => unsubscribe();
-  }, []);
+  }, [hasSeededDefaults]);
 
   // Rebuild chartData whenever payments change by applying all payments to a fresh base
   useEffect(() => {
-    const base = liquidityData.map(d => ({ ...d }));
+    const base = liquidityData.map(d => ({ week: d.week, date: d.date, ingoing: 0, outgoing: 0, target: d.target }));
     payments.forEach((p: any) => {
       let parsed: Date | null = null;
       if (/^\d{4}-\d{2}-\d{2}$/.test(p.date)) parsed = new Date(p.date + 'T00:00:00');
@@ -281,6 +322,12 @@ const App = () => {
             </button>
           </div>
         </div>
+
+        {paymentError && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-800">
+            <strong>Databaseproblem:</strong> {paymentError}
+          </div>
+        )}
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
