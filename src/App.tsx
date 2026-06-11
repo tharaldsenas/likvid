@@ -31,7 +31,7 @@ const upcomingPayments = [
   { id: 5, type: 'Ut', description: 'Husleie Q4', amount: 150000, date: '01.des', status: 'pending' },
 ];
 
-const LiquidityDashboard = () => {
+const App = () => {
   const [timeframe, setTimeframe] = useState('12weeks');
   
   // Calculate key metrics
@@ -42,11 +42,11 @@ const LiquidityDashboard = () => {
   const netCashflow = averageIngoing - averageOutgoing;
 
   // Formatting helpers
-  const formatCurrency = (value) => {
+  const formatCurrency = (value: any) => {
     return new Intl.NumberFormat('nb-NO', { style: 'currency', currency: 'NOK', maximumFractionDigits: 0 }).format(value);
   };
 
-  const formatShortCurrency = (value) => {
+  const formatShortCurrency = (value: any) => {
     if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
     if (value >= 1000) return `${(value / 1000).toFixed(0)}k`;
     return value;
@@ -163,7 +163,7 @@ const LiquidityDashboard = () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
-          {/* Main Chart Section (Takes up 2/3 width on large screens) */}
+          {/* Main Chart Section */}
           <div className="lg:col-span-2 space-y-6">
             
             {/* Balance Forecast Chart */}
@@ -221,7 +221,7 @@ const LiquidityDashboard = () => {
                       cursor={{fill: '#f8fafc'}}
                       contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                     />
-                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '20px' }} />
                     <Bar name="Innbetalinger" dataKey="ingoing" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={40} />
                     <Bar name="Utbetalinger" dataKey="outgoing" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={40} />
                   </BarChart>
@@ -256,7 +256,7 @@ const LiquidityDashboard = () => {
                 <button className="text-sm text-blue-600 hover:text-blue-800 font-medium">Se alle</button>
               </div>
               <div className="divide-y divide-slate-100">
-                {upcomingPayments.map((payment) => (
+                {upcomingPayments.map((payment: any) => (
                   <div key={payment.id} className="p-4 hover:bg-slate-50 transition-colors">
                     <div className="flex justify-between items-start mb-1">
                       <span className="font-medium text-slate-800">{payment.description}</span>
@@ -305,4 +305,4 @@ const LiquidityDashboard = () => {
   );
 };
 
-export default LiquidityDashboard;
+export default App;
