@@ -4,7 +4,7 @@ import {
 } from 'recharts';
 import { 
   TrendingUp, TrendingDown, DollarSign, AlertCircle, 
-  ArrowUpRight, ArrowDownRight, Activity, Calendar
+  ArrowUpRight, ArrowDownRight, Activity, Calendar, Trash2
 } from 'lucide-react';
 
 // Mock data for the next 12 weeks
@@ -33,13 +33,60 @@ const upcomingPayments = [
 
 const App = () => {
   const [timeframe, setTimeframe] = useState('12weeks');
-  
+  const [payments, setPayments] = useState(upcomingPayments);
+  const [showAddPaymentModal, setShowAddPaymentModal] = useState(false);
+  const [paymentType, setPaymentType] = useState<'Inn' | 'Ut'>('Inn');
+  const [formData, setFormData] = useState({
+    description: '',
+    amount: '',
+    date: '',
+  });
+  const [showAllModal, setShowAllModal] = useState(false);
+
   // Calculate key metrics
   const currentBalance = liquidityData[0].balance;
   const lowestForecast = Math.min(...liquidityData.map(d => d.balance));
   const averageIngoing = liquidityData.reduce((acc, curr) => acc + curr.ingoing, 0) / liquidityData.length;
   const averageOutgoing = liquidityData.reduce((acc, curr) => acc + curr.outgoing, 0) / liquidityData.length;
   const netCashflow = averageIngoing - averageOutgoing;
+
+  // Add payment handler
+  const handleAddPayment = () => {
+    if (formData.description && formData.amount && formData.date) {
+      const newPayment = {
+        id: Math.max(...payments.map(p => p.id), 0) + 1,
+        type: paymentType,
+        description: formData.description,
+        amount: parseInt(formData.amount),
+        date: formData.date,
+        status: 'pending' as const,
+      };
+      setPayments([...payments, newPayment]);
+      setFormData({ description: '', amount: '', date: '' });
+      setShowAddPaymentModal(false);
+    }
+  };
+
+  // Export to CSV handler
+  const handleExport = () => {
+    const headers = ['Type', 'Description', 'Amount', 'Date', 'Status'];
+    const rows = payments.map(p => [p.type, p.description, p.amount, p.date, p.status]);
+    const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'payments.csv';
+    a.click();
+  };
+
+  const handleDeletePayment = (id: number) => {
+    setPayments(payments.filter(p => p.id !== id));
+  };
+
+  // derive filtered data for charts based on timeframe
+  const weeksCount = timeframe === '4weeks' ? 4 : timeframe === '12weeks' ? 12 : 24;
+  const filteredData = liquidityData.slice(0, Math.min(weeksCount, liquidityData.length));
 
   // Formatting helpers
   const formatCurrency = (value: any) => {
@@ -171,7 +218,7 @@ const App = () => {
               <h2 className="text-lg font-semibold text-slate-800 mb-4">Saldoutvikling (Prognose)</h2>
               <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={liquidityData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                  <LineChart data={filteredData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                     <XAxis dataKey="week" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} dy={10} />
                     <YAxis 
@@ -182,7 +229,7 @@ const App = () => {
                       domain={[500000, 1500000]}
                     />
                     <Tooltip 
-                      formatter={(value) => formatCurrency(value)}
+                      formatter={(value: any) => formatCurrency(value)}
                       labelStyle={{ color: '#0f172a', fontWeight: 'bold' }}
                       contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                     />
@@ -207,7 +254,7 @@ const App = () => {
               <h2 className="text-lg font-semibold text-slate-800 mb-4">Inn- og utbetalinger per uke</h2>
               <div className="h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={liquidityData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                  <BarChart data={filteredData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                     <XAxis dataKey="week" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} dy={10} />
                     <YAxis 
@@ -217,7 +264,7 @@ const App = () => {
                       tick={{fill: '#64748b', fontSize: 12}}
                     />
                     <Tooltip 
-                      formatter={(value) => formatCurrency(value)}
+                      formatter={(value: any) => formatCurrency(value)}
                       cursor={{fill: '#f8fafc'}}
                       contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                     />
@@ -253,10 +300,10 @@ const App = () => {
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="p-5 border-b border-slate-100 flex justify-between items-center">
                 <h3 className="font-semibold text-slate-800">Store forventede poster</h3>
-                <button className="text-sm text-blue-600 hover:text-blue-800 font-medium">Se alle</button>
+                <button onClick={() => setShowAllModal(true)} className="text-sm text-blue-600 hover:text-blue-800 font-medium">Se alle</button>
               </div>
               <div className="divide-y divide-slate-100">
-                {upcomingPayments.map((payment: any) => (
+                {payments.map((payment: any) => (
                   <div key={payment.id} className="p-4 hover:bg-slate-50 transition-colors">
                     <div className="flex justify-between items-start mb-1">
                       <span className="font-medium text-slate-800">{payment.description}</span>
@@ -279,19 +326,68 @@ const App = () => {
               </div>
             </div>
 
+            {/* All Payments Modal */}
+            {showAllModal && (
+              <div className="fixed inset-0 bg-black bg-opacity-40 z-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-semibold">Alle forventede poster</h2>
+                    <button onClick={() => setShowAllModal(false)} className="text-slate-500 hover:text-slate-700">Lukk</button>
+                  </div>
+                  <div className="space-y-3 max-h-80 overflow-auto">
+                    {payments.length === 0 ? (
+                      <div className="text-sm text-slate-500">Ingen poster funnet.</div>
+                    ) : (
+                      payments.map((p: any) => (
+                        <div key={p.id} className="flex items-center justify-between p-3 border rounded-md">
+                          <div>
+                            <div className="font-medium text-slate-800">{p.description}</div>
+                            <div className="text-sm text-slate-500">Forfall: {p.date}</div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className={`font-semibold ${p.type === 'Inn' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {p.type === 'Inn' ? '+' : '-'}{formatCurrency(p.amount)}
+                            </div>
+                            <button onClick={() => handleDeletePayment(p.id)} className="p-2 rounded-md text-slate-600 hover:bg-slate-100">
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Quick Actions */}
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <h3 className="font-semibold text-slate-800 mb-4">Hurtighandlinger</h3>
               <div className="space-y-2">
-                <button className="w-full flex items-center justify-between p-3 text-left border border-slate-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group">
+                <button 
+                  onClick={() => {
+                    setPaymentType('Inn');
+                    setShowAddPaymentModal(true);
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-left border border-slate-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group"
+                >
                   <span className="text-slate-700 font-medium group-hover:text-blue-700">Legg til forventet inntekt</span>
                   <ArrowUpRight size={18} className="text-slate-400 group-hover:text-blue-600" />
                 </button>
-                <button className="w-full flex items-center justify-between p-3 text-left border border-slate-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group">
+                <button 
+                  onClick={() => {
+                    setPaymentType('Ut');
+                    setShowAddPaymentModal(true);
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-left border border-slate-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group"
+                >
                   <span className="text-slate-700 font-medium group-hover:text-blue-700">Legg til forventet utgift</span>
                   <ArrowDownRight size={18} className="text-slate-400 group-hover:text-blue-600" />
                 </button>
-                <button className="w-full flex items-center justify-between p-3 text-left border border-slate-200 rounded-lg hover:border-slate-300 hover:bg-slate-50 transition-colors">
+                <button 
+                  onClick={handleExport}
+                  className="w-full flex items-center justify-between p-3 text-left border border-slate-200 rounded-lg hover:border-slate-300 hover:bg-slate-50 transition-colors"
+                >
                   <span className="text-slate-700 font-medium">Eksporter rapport</span>
                   <span className="text-slate-400 text-sm">CSV/PDF</span>
                 </button>
@@ -300,6 +396,63 @@ const App = () => {
 
           </div>
         </div>
+
+        {/* Add Payment Modal */}
+        {showAddPaymentModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+              <h2 className="text-xl font-bold text-slate-900 mb-4">
+                {paymentType === 'Inn' ? 'Legg til forventet inntekt' : 'Legg til forventet utgift'}
+              </h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Beskrivelse</label>
+                  <input
+                    type="text"
+                    placeholder="f.eks. Faktura #4096"
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Beløp (NOK)</label>
+                  <input
+                    type="number"
+                    placeholder="0"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Forfallsdato</label>
+                  <input
+                    type="text"
+                    placeholder="dd.mmm"
+                    value={formData.date}
+                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => setShowAddPaymentModal(false)}
+                  className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+                >
+                  Avbryt
+                </button>
+                <button
+                  onClick={handleAddPayment}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+                >
+                  Legg til
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
